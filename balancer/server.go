@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"log"
+	"net"
 	"os"
 	"sync"
 
@@ -13,17 +15,11 @@ const (
 	logLevel   = "DEBUG"
 )
 
-type ServerInfo struct {
-	cpu        int
-	hearthbeat <-chan []byte
-	send       chan<- []byte
-}
-
 type LoadBalancer struct {
 	incoming chan []byte
 	logger   hclog.Logger
 
-	nodes map[string]ServerInfo
+	nodes map[string]ServerSession
 	mu    sync.Mutex
 }
 
@@ -38,8 +34,11 @@ func NewLoadBalancer(ctx context.Context) *LoadBalancer {
 	}
 
 	go lb.Listen(ctx)
+	go lb.ListenForJoins(ctx)
 	return lb
 }
+
+func (lb *LoadBalancer) AddServer(con net.Conn) {}
 
 func (lb *LoadBalancer) Listen(ctx context.Context) {
 	for {
@@ -47,7 +46,28 @@ func (lb *LoadBalancer) Listen(ctx context.Context) {
 		case <-ctx.Done():
 			return
 
-			// TODO: instantiate the new server here
+			// TODO: Listen for client requests, and equaly distribute
+		}
+	}
+}
+
+func (lb *LoadBalancer) ListenForJoins(ctx context.Context) {
+	listener, err := net.Listen("tcp", listenPort)
+	if err != nil {
+		log.Fatalf("failed to start listening: %s", err.Error())
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+
+		default:
+			conn, err := listener.Accept()
+			if err != nil {
+				log.Fatalf("accept failed: %s", err.Error())
+			}
+			lb.AddServer(conn)
 		}
 	}
 }
