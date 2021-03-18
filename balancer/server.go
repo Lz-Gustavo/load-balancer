@@ -13,10 +13,12 @@ import (
 
 const (
 	requestPort  = ":8000"
-	listenPort   = ":9000"
+	joinsPort    = ":9000"
 	logLevel     = "DEBUG"
 	chanBuffSize = 512
 )
+
+type handleFunc func(net.Conn)
 
 type LoadBalancer struct {
 	Incoming chan []byte
@@ -41,8 +43,8 @@ func NewLoadBalancer(ctx context.Context) *LoadBalancer {
 		}),
 	}
 
-	go lb.Listen(ctx)
-	go lb.ListenForJoins(ctx)
+	go lb.Listen(ctx, requestPort, lb.AddClient)
+	go lb.Listen(ctx, joinsPort, lb.AddServer)
 	return lb
 }
 
@@ -54,35 +56,31 @@ func (lb *LoadBalancer) AddServer(con net.Conn) {
 }
 
 func (lb *LoadBalancer) AddClient(con net.Conn) {
-	c := NewClient(con)
+	ctx := context.Background()
+	c := NewClient(ctx, con)
 	lb.clients[con.RemoteAddr().String()] = c
-}
 
-func (lb *LoadBalancer) DistributeLoad(ctx context.Context) {}
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
 
-func (lb *LoadBalancer) Listen(ctx context.Context) {
-	listener, err := net.Listen("tcp", requestPort)
-	if err != nil {
-		log.Fatalf("failed to start listening: %s", err.Error())
-	}
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-
-		default:
-			conn, err := listener.Accept()
-			if err != nil {
-				log.Fatalf("accept failed: %s", err.Error())
+			case data := <-c.Receive:
+				lb.Incoming <- data
 			}
-			lb.AddClient(conn)
 		}
-	}
+	}()
 }
 
-func (lb *LoadBalancer) ListenForJoins(ctx context.Context) {
-	listener, err := net.Listen("tcp", listenPort)
+func (lb *LoadBalancer) DistributeLoad(ctx context.Context) {
+	// TODO: implement a kind of "selective" fanout algorithm, distributing messages
+	// from lb.Incoming based on load parameter and current load of the top N/2 nodes
+	// with less load
+}
+
+func (lb *LoadBalancer) Listen(ctx context.Context, port string, handle handleFunc) {
+	listener, err := net.Listen("tcp", port)
 	if err != nil {
 		log.Fatalf("failed to start listening: %s", err.Error())
 	}
@@ -97,7 +95,7 @@ func (lb *LoadBalancer) ListenForJoins(ctx context.Context) {
 			if err != nil {
 				log.Fatalf("accept failed: %s", err.Error())
 			}
-			lb.AddServer(conn)
+			handle(conn)
 		}
 	}
 }

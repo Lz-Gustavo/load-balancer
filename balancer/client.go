@@ -18,8 +18,8 @@ type Client struct {
 	cancel context.CancelFunc
 }
 
-func NewClient(con net.Conn) *Client {
-	ctx, c := context.WithCancel(context.Background())
+func NewClient(ctx context.Context, con net.Conn) *Client {
+	ctx, c := context.WithCancel(ctx)
 	cl := &Client{
 		Send:    make(chan []byte),
 		Receive: make(chan []byte),
