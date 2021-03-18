@@ -9,9 +9,9 @@ import (
 )
 
 type ServerSession struct {
-	Cpu        int
-	Hearthbeat chan []byte
+	Load       int
 	Send       chan []byte
+	Hearthbeat chan []byte
 
 	reader *bufio.Reader
 	writer *bufio.Writer
@@ -20,15 +20,13 @@ type ServerSession struct {
 }
 
 func NewServerSession(con net.Conn) *ServerSession {
-	reader := bufio.NewReader(con)
-	writer := bufio.NewWriter(con)
 	ctx, c := context.WithCancel(context.Background())
-
 	svr := &ServerSession{
-		Hearthbeat: make(chan []byte),
+		Load:       100,
 		Send:       make(chan []byte),
-		reader:     reader,
-		writer:     writer,
+		Hearthbeat: make(chan []byte),
+		reader:     bufio.NewReader(con),
+		writer:     bufio.NewWriter(con),
 		conn:       con,
 		cancel:     c,
 	}
