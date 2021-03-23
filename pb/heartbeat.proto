@@ -1,0 +1,8 @@
+syntax = "proto3";
+package pb;
+
+message Heartbeat {
+	int32 CurrentLoad = 1;
+}
+
+option go_package = "load-balancer/pb";

@@ -9,9 +9,9 @@ import (
 )
 
 type ServerSession struct {
-	Load       int
-	Send       chan []byte
-	Hearthbeat chan []byte
+	Load      int
+	Send      chan []byte
+	Heartbeat chan []byte
 
 	reader *bufio.Reader
 	writer *bufio.Writer
@@ -22,13 +22,13 @@ type ServerSession struct {
 func NewServerSession(con net.Conn) *ServerSession {
 	ctx, c := context.WithCancel(context.Background())
 	svr := &ServerSession{
-		Load:       100,
-		Send:       make(chan []byte),
-		Hearthbeat: make(chan []byte),
-		reader:     bufio.NewReader(con),
-		writer:     bufio.NewWriter(con),
-		conn:       con,
-		cancel:     c,
+		Load:      100,
+		Send:      make(chan []byte),
+		Heartbeat: make(chan []byte),
+		reader:    bufio.NewReader(con),
+		writer:    bufio.NewWriter(con),
+		conn:      con,
+		cancel:    c,
 	}
 	svr.Listen(ctx)
 	return svr
@@ -48,7 +48,7 @@ func (sv *ServerSession) Read(ctx context.Context) {
 		default:
 			line, err := sv.reader.ReadBytes('\n')
 			if err == nil && len(line) > 1 {
-				sv.Hearthbeat <- line
+				sv.Heartbeat <- line
 
 			} else if err == io.EOF {
 				return
