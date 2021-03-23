@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"log"
+	"math/rand"
 	"net"
 	"os"
 	"sort"
@@ -129,8 +130,40 @@ func (lb *LoadBalancer) retrieveLeastBusyNodes() []*ServerSession {
 	return nodes
 }
 
-// raffleRoulette raffles a single node from the list, based on its current load
+// raffleRoulette raffles a single node from the list, based on its current load.
+// For instance, consider an example with the [10, 10, 20, 40] input:
+//  1. At first, creates a list of its complements, the available load:
+//     [90, 90, 80, 60] --- total: 320
+//
+//  2. Calculate the percentage of each available load:
+//    [28.125, 28.125, 25, 18.75]
+//
+//  3. Sum each percentage, creating roulette intervals:
+//    [28.125, 56.25, 81.25, 100]
+//
+//  4. Draws a rand num from within [1, 100] range, and check on which roulette
+//     interval it falls off
 func (lb *LoadBalancer) raffleRoulette(nodes []*ServerSession) int {
+	odds := make([]int, len(nodes), len(nodes))
+	sum := 0
+	for i, n := range nodes {
+		c := 100 - n.Load
+		odds[i] = c
+		sum += c
+	}
+
+	interval := 0
+	for i, odd := range odds {
+		interval += odd * 100 / sum
+		odds[i] = interval
+	}
+
+	num := rand.Intn(100) + 1
+	for i, interval := range odds {
+		if num <= interval {
+			return i
+		}
+	}
 	return 0
 }
 
