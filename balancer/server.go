@@ -6,6 +6,7 @@ import (
 	"log"
 	"net"
 	"os"
+	"sort"
 	"sync"
 
 	"github.com/hashicorp/go-hclog"
@@ -77,6 +78,18 @@ func (lb *LoadBalancer) DistributeLoad(ctx context.Context) {
 	// TODO: implement a kind of "selective" fanout algorithm, distributing messages
 	// from lb.Incoming based on load parameter and current load of the top N/2 nodes
 	// with less load
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+
+		case req := <-lb.Incoming:
+			nodes := lb.retrieveLeastBusyNodes()
+			i := lb.raffleRoulette(nodes)
+			nodes[i].Send <- req
+		}
+	}
 }
 
 func (lb *LoadBalancer) Listen(ctx context.Context, port string, handle handleFunc) {
@@ -99,3 +112,30 @@ func (lb *LoadBalancer) Listen(ctx context.Context, port string, handle handleFu
 		}
 	}
 }
+
+// retrieveLeastBusyNodes fetches the top N/2 nodes with less load
+func (lb *LoadBalancer) retrieveLeastBusyNodes() []*ServerSession {
+	lb.mu.Lock()
+	defer lb.mu.Unlock()
+
+	n := len(lb.nodes)
+	nodes := make([]*ServerSession, n)
+	for _, v := range lb.nodes {
+		nodes = append(nodes, v)
+	}
+
+	sort.Sort(SortByLoad(nodes))
+	nodes = nodes[:n/2]
+	return nodes
+}
+
+// raffleRoulette raffles a single node from the list, based on its current load
+func (lb *LoadBalancer) raffleRoulette(nodes []*ServerSession) int {
+	return 0
+}
+
+type SortByLoad []*ServerSession
+
+func (a SortByLoad) Len() int           { return len(a) }
+func (a SortByLoad) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
+func (a SortByLoad) Less(i, j int) bool { return a[i].Load < a[j].Load }
