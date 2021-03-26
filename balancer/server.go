@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"fmt"
 	"load-balancer/pb"
@@ -21,6 +20,7 @@ const (
 	joinsPort    = ":9000"
 	logLevel     = "DEBUG"
 	chanBuffSize = 512
+	ioBuffSize   = 256
 )
 
 type handleFunc func(net.Conn) error
@@ -56,11 +56,14 @@ func NewLoadBalancer(ctx context.Context) *LoadBalancer {
 }
 
 func (lb *LoadBalancer) AddServer(con net.Conn) error {
-	rd := bufio.NewReader(con)
-	raw, err := rd.ReadBytes('\n')
+	lb.logger.Info("got server join request")
+	buff := make([]byte, ioBuffSize)
+
+	ln, err := con.Read(buff)
 	if err != nil {
 		return err
 	}
+	raw := buff[:ln]
 
 	jr := &pb.JoinRequest{}
 	err = proto.Unmarshal(raw, jr)
@@ -77,11 +80,12 @@ func (lb *LoadBalancer) AddServer(con net.Conn) error {
 	lb.nodes[jr.Ip] = s
 	lb.mu.Unlock()
 
-	lb.logger.Info(fmt.Sprintln("Server '", jr.Ip, "' added"))
+	lb.logger.Info(fmt.Sprintln("server '", jr.Ip, "' added"))
 	return nil
 }
 
 func (lb *LoadBalancer) AddClient(con net.Conn) error {
+	lb.logger.Info("got client join request")
 	ctx := context.Background()
 	c := NewClient(ctx, con)
 	addr := con.RemoteAddr().String()
@@ -99,7 +103,7 @@ func (lb *LoadBalancer) AddClient(con net.Conn) error {
 		}
 	}()
 
-	lb.logger.Info(fmt.Sprintln("Client '", addr, "' just connected"))
+	lb.logger.Info(fmt.Sprintln("client '", addr, "' just connected"))
 	return nil
 }
 
@@ -126,7 +130,7 @@ func (lb *LoadBalancer) Listen(ctx context.Context, port string, handle handleFu
 	if err != nil {
 		log.Fatalln("failed to start listening:", err.Error())
 	}
-	lb.logger.Info("Listening for requests...")
+	lb.logger.Info(fmt.Sprintln("listening for requests on", port))
 
 	for {
 		select {
