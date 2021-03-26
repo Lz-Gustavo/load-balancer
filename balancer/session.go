@@ -9,7 +9,7 @@ import (
 )
 
 type ServerSession struct {
-	Load      int
+	Load      int32
 	Send      chan []byte
 	Heartbeat chan []byte
 

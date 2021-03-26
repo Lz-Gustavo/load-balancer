@@ -3,6 +3,8 @@ package main
 import (
 	"bufio"
 	"context"
+	"fmt"
+	"load-balancer/pb"
 	"log"
 	"math/rand"
 	"net"
@@ -11,6 +13,7 @@ import (
 	"sync"
 
 	"github.com/hashicorp/go-hclog"
+	"google.golang.org/protobuf/proto"
 )
 
 const (
@@ -20,7 +23,7 @@ const (
 	chanBuffSize = 512
 )
 
-type handleFunc func(net.Conn)
+type handleFunc func(net.Conn) error
 
 type LoadBalancer struct {
 	Incoming chan []byte
@@ -30,10 +33,12 @@ type LoadBalancer struct {
 	nodes  map[string]*ServerSession
 	mu     sync.Mutex
 	logger hclog.Logger
+	cancel context.CancelFunc
 }
 
 // NewLoadBalancer instantiates the load balancer process
 func NewLoadBalancer(ctx context.Context) *LoadBalancer {
+	ct, cn := context.WithCancel(ctx)
 	lb := &LoadBalancer{
 		Incoming: make(chan []byte, chanBuffSize),
 		clients:  make(map[string]*Client),
@@ -43,24 +48,45 @@ func NewLoadBalancer(ctx context.Context) *LoadBalancer {
 			Level:  hclog.LevelFromString(logLevel),
 			Output: os.Stderr,
 		}),
+		cancel: cn,
 	}
 
-	go lb.Listen(ctx, requestPort, lb.AddClient)
-	go lb.Listen(ctx, joinsPort, lb.AddServer)
+	go lb.Listen(ct, requestPort, lb.AddClient)
+	go lb.Listen(ct, joinsPort, lb.AddServer)
 	return lb
 }
 
-func (lb *LoadBalancer) AddServer(con net.Conn) {
-	s := NewServerSession(con)
+func (lb *LoadBalancer) AddServer(con net.Conn) error {
+	rd := bufio.NewReader(con)
+	raw, err := rd.ReadBytes('\n')
+	if err != nil {
+		return err
+	}
+
+	jr := &pb.JoinRequest{}
+	err = proto.Unmarshal(raw, jr)
+	if err != nil {
+		return err
+	}
+
+	svr, err := net.Dial("tcp", jr.Ip)
+	if err != nil {
+		return err
+	}
+	s := NewServerSession(svr)
 	lb.mu.Lock()
-	lb.nodes[con.RemoteAddr().String()] = s
+	lb.nodes[jr.Ip] = s
 	lb.mu.Unlock()
+
+	lb.logger.Info(fmt.Sprintln("Server '", jr.Ip, "' added"))
+	return nil
 }
 
-func (lb *LoadBalancer) AddClient(con net.Conn) {
+func (lb *LoadBalancer) AddClient(con net.Conn) error {
 	ctx := context.Background()
 	c := NewClient(ctx, con)
-	lb.clients[con.RemoteAddr().String()] = c
+	addr := con.RemoteAddr().String()
+	lb.clients[addr] = c
 
 	go func() {
 		for {
@@ -73,6 +99,9 @@ func (lb *LoadBalancer) AddClient(con net.Conn) {
 			}
 		}
 	}()
+
+	lb.logger.Info(fmt.Sprintln("Client '", addr, "' just connected"))
+	return nil
 }
 
 func (lb *LoadBalancer) DistributeLoad(ctx context.Context) {
@@ -98,6 +127,7 @@ func (lb *LoadBalancer) Listen(ctx context.Context, port string, handle handleFu
 	if err != nil {
 		log.Fatalf("failed to start listening: %s", err.Error())
 	}
+	lb.logger.Info("Listening for requests...")
 
 	for {
 		select {
@@ -107,11 +137,25 @@ func (lb *LoadBalancer) Listen(ctx context.Context, port string, handle handleFu
 		default:
 			conn, err := listener.Accept()
 			if err != nil {
-				log.Fatalf("accept failed: %s", err.Error())
+				log.Fatalln("accept failed with err:", err.Error())
 			}
-			handle(conn)
+
+			err = handle(conn)
+			if err != nil {
+				log.Fatalln("failed handling connection, got err:", err.Error())
+			}
 		}
 	}
+}
+
+func (lb *LoadBalancer) Shutdown() {
+	for _, c := range lb.clients {
+		c.Disconnect()
+	}
+	for _, s := range lb.nodes {
+		s.Disconnect()
+	}
+	lb.cancel()
 }
 
 // retrieveLeastBusyNodes fetches the top N/2 nodes with less load
@@ -144,21 +188,21 @@ func (lb *LoadBalancer) retrieveLeastBusyNodes() []*ServerSession {
 //  4. Draws a rand num from within [1, 100] range, and check on which roulette
 //     interval it falls off
 func (lb *LoadBalancer) raffleRoulette(nodes []*ServerSession) int {
-	odds := make([]int, len(nodes), len(nodes))
-	sum := 0
+	odds := make([]int32, len(nodes), len(nodes))
+	sum := int32(0)
 	for i, n := range nodes {
 		c := 100 - n.Load
 		odds[i] = c
 		sum += c
 	}
 
-	interval := 0
+	interval := int32(0)
 	for i, odd := range odds {
 		interval += odd * 100 / sum
 		odds[i] = interval
 	}
 
-	num := rand.Intn(100) + 1
+	num := int32(rand.Intn(100) + 1)
 	for i, interval := range odds {
 		if num <= interval {
 			return i
