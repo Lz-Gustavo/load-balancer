@@ -27,10 +27,9 @@ type handleFunc func(net.Conn) error
 
 type LoadBalancer struct {
 	Incoming chan []byte
-	reader   *bufio.Reader
 	clients  map[string]*Client
+	nodes    map[string]*ServerSession
 
-	nodes  map[string]*ServerSession
 	mu     sync.Mutex
 	logger hclog.Logger
 	cancel context.CancelFunc
@@ -125,7 +124,7 @@ func (lb *LoadBalancer) DistributeLoad(ctx context.Context) {
 func (lb *LoadBalancer) Listen(ctx context.Context, port string, handle handleFunc) {
 	listener, err := net.Listen("tcp", port)
 	if err != nil {
-		log.Fatalf("failed to start listening: %s", err.Error())
+		log.Fatalln("failed to start listening:", err.Error())
 	}
 	lb.logger.Info("Listening for requests...")
 
@@ -135,12 +134,12 @@ func (lb *LoadBalancer) Listen(ctx context.Context, port string, handle handleFu
 			return
 
 		default:
-			conn, err := listener.Accept()
+			con, err := listener.Accept()
 			if err != nil {
 				log.Fatalln("accept failed with err:", err.Error())
 			}
 
-			err = handle(conn)
+			err = handle(con)
 			if err != nil {
 				log.Fatalln("failed handling connection, got err:", err.Error())
 			}

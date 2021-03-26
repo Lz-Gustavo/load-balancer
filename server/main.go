@@ -1,7 +1,11 @@
 package main
 
 import (
+	"context"
 	"flag"
+	"log"
+	"os"
+	"os/signal"
 )
 
 var (
@@ -16,5 +20,16 @@ func init() {
 
 func main() {
 	flag.Parse()
+	svr := NewNodeInstance(context.Background())
 
+	err := svr.Connect()
+	if err != nil {
+		log.Fatalln("Failed to connect to server '", joinAddr, "', got error:", err.Error())
+	}
+
+	terminate := make(chan os.Signal, 1)
+	signal.Notify(terminate, os.Interrupt)
+	<-terminate
+
+	svr.Shutdown()
 }
