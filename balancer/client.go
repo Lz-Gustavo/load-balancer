@@ -4,13 +4,16 @@ import (
 	"bufio"
 	"context"
 	"io"
+	"load-balancer/pb"
 	"log"
 	"net"
+
+	"google.golang.org/protobuf/proto"
 )
 
 type Client struct {
 	Send    chan []byte
-	Receive chan []byte
+	Receive chan *pb.Request
 
 	reader *bufio.Reader
 	writer *bufio.Writer
@@ -22,7 +25,7 @@ func NewClient(ctx context.Context, con net.Conn) *Client {
 	ctx, c := context.WithCancel(ctx)
 	cl := &Client{
 		Send:    make(chan []byte),
-		Receive: make(chan []byte),
+		Receive: make(chan *pb.Request),
 		reader:  bufio.NewReader(con),
 		writer:  bufio.NewWriter(con),
 		conn:    con,
@@ -44,11 +47,19 @@ func (cl *Client) Read(ctx context.Context) {
 			return
 
 		default:
-			line, err := cl.reader.ReadBytes('\n')
-			if err == nil && len(line) > 1 {
-				cl.Receive <- line
+			buff := make([]byte, ioBuffSize)
+			ln, err := cl.reader.Read(buff)
+			if err == nil && ln > 1 {
+				req := &pb.Request{}
+				err = proto.Unmarshal(buff[:ln], req)
+				if err != nil {
+					log.Println("failed parsing request, got err:", err.Error())
+					return
+				}
+				cl.Receive <- req
 
 			} else if err == io.EOF {
+				log.Println("client disconnected")
 				return
 			}
 		}

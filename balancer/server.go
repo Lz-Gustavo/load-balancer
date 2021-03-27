@@ -10,6 +10,7 @@ import (
 	"os"
 	"sort"
 	"sync"
+	"time"
 
 	"github.com/hashicorp/go-hclog"
 	"google.golang.org/protobuf/proto"
@@ -26,7 +27,7 @@ const (
 type handleFunc func(net.Conn) error
 
 type LoadBalancer struct {
-	Incoming chan []byte
+	Incoming chan *pb.Request
 	clients  map[string]*Client
 	nodes    map[string]*ServerSession
 
@@ -39,13 +40,14 @@ type LoadBalancer struct {
 func NewLoadBalancer(ctx context.Context) *LoadBalancer {
 	ct, cn := context.WithCancel(ctx)
 	lb := &LoadBalancer{
-		Incoming: make(chan []byte, chanBuffSize),
+		Incoming: make(chan *pb.Request, chanBuffSize),
 		clients:  make(map[string]*Client),
 		nodes:    make(map[string]*ServerSession),
 		logger: hclog.New(&hclog.LoggerOptions{
-			Name:   "load",
-			Level:  hclog.LevelFromString(logLevel),
-			Output: os.Stderr,
+			Name:       "load",
+			Level:      hclog.LevelFromString(logLevel),
+			TimeFormat: time.Kitchen,
+			Output:     os.Stderr,
 		}),
 		cancel: cn,
 	}
@@ -75,12 +77,15 @@ func (lb *LoadBalancer) AddServer(con net.Conn) error {
 	if err != nil {
 		return err
 	}
-	s := NewServerSession(svr)
+	ctx := context.Background()
+
+	s := NewServerSession(ctx, svr)
 	lb.mu.Lock()
 	lb.nodes[jr.Ip] = s
 	lb.mu.Unlock()
 
-	lb.logger.Info(fmt.Sprintln("server '", jr.Ip, "' added"))
+	go lb.updateServerLoad(ctx, s, jr.Ip)
+	lb.logger.Info(fmt.Sprint("server '", jr.Ip, "' added"))
 	return nil
 }
 
@@ -97,13 +102,13 @@ func (lb *LoadBalancer) AddClient(con net.Conn) error {
 			case <-ctx.Done():
 				return
 
-			case data := <-c.Receive:
-				lb.Incoming <- data
+			case req := <-c.Receive:
+				lb.Incoming <- req
 			}
 		}
 	}()
 
-	lb.logger.Info(fmt.Sprintln("client '", addr, "' just connected"))
+	lb.logger.Info(fmt.Sprint("client '", addr, "' just connected"))
 	return nil
 }
 
@@ -130,7 +135,7 @@ func (lb *LoadBalancer) Listen(ctx context.Context, port string, handle handleFu
 	if err != nil {
 		log.Fatalln("failed to start listening:", err.Error())
 	}
-	lb.logger.Info(fmt.Sprintln("listening for requests on", port))
+	lb.logger.Info(fmt.Sprint("listening for requests on ", port))
 
 	for {
 		select {
@@ -212,6 +217,21 @@ func (lb *LoadBalancer) raffleRoulette(nodes []*ServerSession) int {
 		}
 	}
 	return 0
+}
+
+func (lb *LoadBalancer) updateServerLoad(ctx context.Context, sv *ServerSession, ip string) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+
+		case hb := <-sv.Heartbeat:
+			lb.mu.Lock()
+			sv.Load = hb.CurrentLoad
+			lb.mu.Unlock()
+			lb.logger.Info(fmt.Sprint(ip, " current load: ", hb.CurrentLoad))
+		}
+	}
 }
 
 type SortByLoad []*ServerSession

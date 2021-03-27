@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"fmt"
 	"io"
@@ -19,9 +18,10 @@ import (
 )
 
 const (
-	heartbeatTimeout = time.Second
+	heartbeatTimeout = 3 * time.Second
 	logLevel         = "DEBUG"
 	chanBuffSize     = 512
+	ioBuffSize       = 256
 )
 
 type NodeInstance struct {
@@ -38,9 +38,10 @@ func NewNodeInstance(ctx context.Context) *NodeInstance {
 	nd := &NodeInstance{
 		t: time.NewTicker(heartbeatTimeout),
 		logger: hclog.New(&hclog.LoggerOptions{
-			Name:   "node",
-			Level:  hclog.LevelFromString(logLevel),
-			Output: os.Stderr,
+			Name:       "node",
+			Level:      hclog.LevelFromString(logLevel),
+			TimeFormat: time.Kitchen,
+			Output:     os.Stderr,
 		}),
 		cancel: cn,
 	}
@@ -54,6 +55,7 @@ func (nd *NodeInstance) Connect() error {
 	if err != nil {
 		return err
 	}
+	defer con.Close()
 
 	jr := &pb.JoinRequest{Ip: listenAddr}
 	raw, err := proto.Marshal(jr)
@@ -66,7 +68,7 @@ func (nd *NodeInstance) Connect() error {
 		return err
 	}
 
-	nd.logger.Info(fmt.Sprintln("sent connect to", joinAddr, "load balancer"))
+	nd.logger.Info(fmt.Sprint("sent connect to", joinAddr, "load balancer"))
 	return nil
 }
 
@@ -96,16 +98,16 @@ func (nd *NodeInstance) Listen(ctx context.Context) {
 }
 
 func (nd *NodeInstance) ReceiveLoads(ctx context.Context, con net.Conn) {
-	rd := bufio.NewReader(con)
 	for {
 		select {
 		case <-ctx.Done():
 			return
 
 		default:
-			msg, err := rd.ReadBytes('\n')
-			if err == nil && len(msg) > 1 {
-				err = nd.parseAndApplyLoadRequest(ctx, msg)
+			buff := make([]byte, ioBuffSize)
+			ln, err := con.Read(buff)
+			if err == nil && ln > 1 {
+				err = nd.parseAndApplyLoadRequest(ctx, buff[:ln])
 				if err != nil {
 					log.Fatalln("failed to interpret load request, got err:", err.Error())
 				}
@@ -118,25 +120,22 @@ func (nd *NodeInstance) ReceiveLoads(ctx context.Context, con net.Conn) {
 }
 
 func (nd *NodeInstance) SendHeartbeat(ctx context.Context, con net.Conn) {
-	wr := bufio.NewWriter(con)
 	for {
 		select {
 		case <-ctx.Done():
 			return
 
 		case <-nd.t.C:
-			nd.mu.Lock()
 			raw, err := nd.generateHeartbeatMessage()
 			if err != nil {
 				log.Fatalln("failed to generate heartbeat message, err:", err.Error())
 			}
+			msg := append(raw, []byte("\n")...)
 
-			raw = append(raw, []byte("\n")...)
-			_, err = wr.Write(raw)
+			_, err = con.Write(msg)
 			if err != nil {
 				log.Fatalln("failed to send heartbeat message, err:", err.Error())
 			}
-			nd.mu.Unlock()
 		}
 	}
 }

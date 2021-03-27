@@ -2,69 +2,99 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
+	"fmt"
 	"io"
+	"load-balancer/pb"
 	"log"
 	"net"
+	"os"
+	"time"
+
+	"github.com/hashicorp/go-hclog"
+	"google.golang.org/protobuf/proto"
 )
 
 type ServerSession struct {
 	Load      int32
-	Send      chan []byte
-	Heartbeat chan []byte
+	Send      chan *pb.Request
+	Heartbeat chan *pb.Heartbeat
 
 	reader *bufio.Reader
 	writer *bufio.Writer
 	conn   net.Conn
+	logger hclog.Logger
 	cancel context.CancelFunc
 }
 
-func NewServerSession(con net.Conn) *ServerSession {
-	ctx, c := context.WithCancel(context.Background())
+func NewServerSession(ctx context.Context, con net.Conn) *ServerSession {
+	ct, c := context.WithCancel(ctx)
 	svr := &ServerSession{
 		Load:      100,
-		Send:      make(chan []byte),
-		Heartbeat: make(chan []byte),
+		Send:      make(chan *pb.Request, chanBuffSize),
+		Heartbeat: make(chan *pb.Heartbeat, chanBuffSize),
 		reader:    bufio.NewReader(con),
 		writer:    bufio.NewWriter(con),
-		conn:      con,
-		cancel:    c,
+		logger: hclog.New(&hclog.LoggerOptions{
+			Name:       "session",
+			Level:      hclog.LevelFromString(logLevel),
+			TimeFormat: time.Kitchen,
+			Output:     os.Stderr,
+		}),
+		conn:   con,
+		cancel: c,
 	}
-	svr.Listen(ctx)
+	svr.Run(ct)
 	return svr
 }
 
-func (sv *ServerSession) Listen(ctx context.Context) {
-	go sv.Read(ctx)
-	go sv.Write(ctx)
+func (sv *ServerSession) Run(ctx context.Context) {
+	go sv.ReadHeartbeats(ctx)
+	go sv.WriteRequests(ctx)
 }
 
-func (sv *ServerSession) Read(ctx context.Context) {
+func (sv *ServerSession) ReadHeartbeats(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
 			return
 
 		default:
-			line, err := sv.reader.ReadBytes('\n')
-			if err == nil && len(line) > 1 {
-				sv.Heartbeat <- line
+			raw, err := sv.reader.ReadBytes('\n')
+			if err != nil {
+				if err == io.EOF {
+					sv.logger.Warn("server disconnected")
+					return
+				}
+				sv.logger.Error(fmt.Sprint("got undefined error while reading request, err:", err.Error()))
+			}
 
-			} else if err == io.EOF {
+			data := bytes.TrimSuffix(raw, []byte("\n"))
+			hb := &pb.Heartbeat{}
+			err = proto.Unmarshal(data, hb)
+			if err != nil {
+				sv.logger.Info(fmt.Sprint("failed parsing heartbeat, got err:", err.Error()))
 				return
 			}
+			sv.Heartbeat <- hb
 		}
 	}
 }
 
-func (sv *ServerSession) Write(ctx context.Context) {
+func (sv *ServerSession) WriteRequests(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
 			return
 
-		case data := <-sv.Send:
-			_, err := sv.writer.Write(data)
+		case req := <-sv.Send:
+			raw, err := proto.Marshal(req)
+			if err != nil {
+				log.Fatalln("failed marshaling proto request, err:", err.Error())
+			}
+
+			_, err = sv.writer.Write(raw)
 			if err != nil {
 				log.Fatalln("failed to send data, err:", err.Error())
 			}
