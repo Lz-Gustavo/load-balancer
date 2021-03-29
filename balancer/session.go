@@ -93,8 +93,9 @@ func (sv *ServerSession) WriteRequests(ctx context.Context) {
 			if err != nil {
 				log.Fatalln("failed marshaling proto request, err:", err.Error())
 			}
+			msg := append(raw, []byte("\n")...)
 
-			_, err = sv.writer.Write(raw)
+			_, err = sv.conn.Write(msg)
 			if err != nil {
 				log.Fatalln("failed to send data, err:", err.Error())
 			}

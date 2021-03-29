@@ -18,7 +18,6 @@ import (
 type Client struct {
 	Receive chan *pb.Request
 	reader  *bufio.Reader
-	writer  *bufio.Writer
 
 	conn   net.Conn
 	logger hclog.Logger
@@ -30,7 +29,6 @@ func NewClient(ctx context.Context, con net.Conn) *Client {
 	cl := &Client{
 		Receive: make(chan *pb.Request),
 		reader:  bufio.NewReader(con),
-		writer:  bufio.NewWriter(con),
 		logger: hclog.New(&hclog.LoggerOptions{
 			Name:       "client",
 			Level:      hclog.LevelFromString(logLevel),
@@ -67,6 +65,11 @@ func (cl *Client) Listen(ctx context.Context) {
 				cl.logger.Warn(fmt.Sprint("failed parsing request, got err: ", err.Error()))
 				break
 			}
+
+			if !isAValidRequest(req) {
+				cl.logger.Warn(fmt.Sprint("request ", req, " has an invalid format, ignoring..."))
+				break
+			}
 			cl.Receive <- req
 		}
 	}
@@ -75,4 +78,8 @@ func (cl *Client) Listen(ctx context.Context) {
 func (cl *Client) Disconnect() {
 	cl.cancel()
 	cl.conn.Close()
+}
+
+func isAValidRequest(req *pb.Request) bool {
+	return req.Load > 0 && req.Load <= 100 && req.MaxExecTime > 0
 }

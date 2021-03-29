@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"load-balancer/pb"
 	"log"
+	"math"
 	"math/rand"
 	"net"
 	"os"
@@ -54,6 +55,7 @@ func NewLoadBalancer(ctx context.Context) *LoadBalancer {
 
 	go lb.Listen(ct, requestPort, lb.AddClient)
 	go lb.Listen(ct, joinsPort, lb.AddServer)
+	go lb.DistributeLoad(ct)
 	return lb
 }
 
@@ -103,7 +105,6 @@ func (lb *LoadBalancer) AddClient(con net.Conn) error {
 				return
 
 			case req := <-c.Receive:
-				fmt.Println(req)
 				lb.logger.Info(fmt.Sprint("received req from client '", addr, "'"))
 				lb.Incoming <- req
 			}
@@ -114,11 +115,10 @@ func (lb *LoadBalancer) AddClient(con net.Conn) error {
 	return nil
 }
 
+// DistributeLoad implements a kind of "selective" fanout algorithm, distributing
+// messages from lb.Incoming based on load parameter and current load of the top
+// N/2 nodes with less load
 func (lb *LoadBalancer) DistributeLoad(ctx context.Context) {
-	// TODO: implement a kind of "selective" fanout algorithm, distributing messages
-	// from lb.Incoming based on load parameter and current load of the top N/2 nodes
-	// with less load
-
 	for {
 		select {
 		case <-ctx.Done():
@@ -126,7 +126,9 @@ func (lb *LoadBalancer) DistributeLoad(ctx context.Context) {
 
 		case req := <-lb.Incoming:
 			nodes := lb.retrieveLeastBusyNodes()
+			fmt.Println("least busy nodes are:", nodes)
 			i := lb.raffleRoulette(nodes)
+			fmt.Println("sending to node", i)
 			nodes[i].Send <- req
 		}
 	}
@@ -173,14 +175,20 @@ func (lb *LoadBalancer) retrieveLeastBusyNodes() []*ServerSession {
 	lb.mu.Lock()
 	defer lb.mu.Unlock()
 
-	n := len(lb.nodes)
-	nodes := make([]*ServerSession, n)
+	nodes := make([]*ServerSession, 0)
 	for _, v := range lb.nodes {
-		nodes = append(nodes, v)
+		if v != nil {
+			nodes = append(nodes, v)
+		}
 	}
 
+	fmt.Println("sorting nodes", nodes)
+
 	sort.Sort(SortByLoad(nodes))
-	nodes = nodes[:n/2]
+	half := int(math.Ceil(float64(len(nodes) / 2)))
+	fmt.Println("cuting slice up to", half)
+	nodes = nodes[:half]
+	//nodes = nodes[:len(nodes)/2]
 	return nodes
 }
 

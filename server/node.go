@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -98,22 +100,26 @@ func (nd *NodeInstance) Listen(ctx context.Context) {
 }
 
 func (nd *NodeInstance) ReceiveLoads(ctx context.Context, con net.Conn) {
+	rd := bufio.NewReader(con)
 	for {
 		select {
 		case <-ctx.Done():
 			return
 
 		default:
-			buff := make([]byte, ioBuffSize)
-			ln, err := con.Read(buff)
-			if err == nil && ln > 1 {
-				err = nd.parseAndApplyLoadRequest(ctx, buff[:ln])
-				if err != nil {
-					log.Fatalln("failed to interpret load request, got err:", err.Error())
+			raw, err := rd.ReadBytes('\n')
+			if err != nil {
+				if err == io.EOF {
+					nd.logger.Warn("load balancer disconnected")
+					return
 				}
+				nd.logger.Error(fmt.Sprint("got undefined error while reading request, err: ", err.Error()))
+			}
 
-			} else if err == io.EOF {
-				return
+			data := bytes.TrimSuffix(raw, []byte("\n"))
+			err = nd.parseAndApplyLoadRequest(ctx, data)
+			if err != nil {
+				log.Println("failed to interpret load request, got err:", err.Error(), "continuing...")
 			}
 		}
 	}
@@ -152,12 +158,17 @@ func (nd *NodeInstance) parseAndApplyLoadRequest(ctx context.Context, req []byte
 	}
 
 	nd.mu.Lock()
-	if nd.Load-r.Load >= 0 {
-		nd.Load -= r.Load
+	defer nd.mu.Unlock()
+
+	if nd.Load+r.Load <= 100 {
+		nd.Load += r.Load
+
+	} else {
+		return fmt.Errorf("insufficient load to apply %d", r.Load)
 	}
-	nd.mu.Unlock()
 
 	go nd.releaseResourceAfterExecTime(ctx, r)
+	nd.logger.Info(fmt.Sprint("applied ", r.Load, " load for up to ", r.MaxExecTime, " sec"))
 	return nil
 }
 
@@ -169,7 +180,7 @@ func (nd *NodeInstance) generateHeartbeatMessage() ([]byte, error) {
 	return proto.Marshal(hb)
 }
 
-// releaseResourceAfterExecTime re-increments the node's current load after a random
+// releaseResourceAfterExecTime decrements the node's current load after a random
 // period of time, following the informed loadReq.MaxExecTime.
 func (nd *NodeInstance) releaseResourceAfterExecTime(ctx context.Context, loadReq *pb.Request) {
 	sec := rand.Int31n(loadReq.MaxExecTime)
@@ -182,7 +193,7 @@ func (nd *NodeInstance) releaseResourceAfterExecTime(ctx context.Context, loadRe
 
 		case <-timer.C:
 			nd.mu.Lock()
-			nd.Load += loadReq.Load
+			nd.Load -= loadReq.Load
 			nd.mu.Unlock()
 		}
 	}

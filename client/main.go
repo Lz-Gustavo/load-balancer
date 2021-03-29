@@ -79,7 +79,5 @@ func marshalIntoProtobuffWithDelimeter(msg string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-
-	m := append(raw, []byte("\n")...)
-	return m, nil
+	return append(raw, []byte("\n")...), nil
 }
