@@ -67,14 +67,14 @@ func (sv *ServerSession) ReadHeartbeats(ctx context.Context) {
 					sv.logger.Warn("server disconnected")
 					return
 				}
-				sv.logger.Error(fmt.Sprint("got undefined error while reading request, err:", err.Error()))
+				sv.logger.Error(fmt.Sprint("got undefined error while reading heartbeat, err: ", err.Error()))
 			}
 
 			data := bytes.TrimSuffix(raw, []byte("\n"))
 			hb := &pb.Heartbeat{}
 			err = proto.Unmarshal(data, hb)
 			if err != nil {
-				sv.logger.Info(fmt.Sprint("failed parsing heartbeat, got err:", err.Error()))
+				sv.logger.Error(fmt.Sprint("failed parsing heartbeat, got err: ", err.Error()))
 				return
 			}
 			sv.Heartbeat <- hb

@@ -103,6 +103,8 @@ func (lb *LoadBalancer) AddClient(con net.Conn) error {
 				return
 
 			case req := <-c.Receive:
+				fmt.Println(req)
+				lb.logger.Info(fmt.Sprint("received req from client '", addr, "'"))
 				lb.Incoming <- req
 			}
 		}
