@@ -48,6 +48,7 @@ func NewLoadBalancer(ctx context.Context) *LoadBalancer {
 			Name:       "load",
 			Level:      hclog.LevelFromString(logLevel),
 			TimeFormat: time.Kitchen,
+			Color:      hclog.AutoColor,
 			Output:     os.Stderr,
 		}),
 		cancel: cn,
@@ -79,14 +80,14 @@ func (lb *LoadBalancer) AddServer(con net.Conn) error {
 	if err != nil {
 		return err
 	}
-	ctx := context.Background()
+	ctx, cn := context.WithCancel(context.Background())
 
-	s := NewServerSession(ctx, svr)
+	s := NewServerSession(ctx, cn, svr)
 	lb.mu.Lock()
 	lb.nodes[jr.Ip] = s
 	lb.mu.Unlock()
 
-	go lb.updateServerLoad(ctx, s, jr.Ip)
+	go lb.updateServerLoad(ctx, cn, s, jr.Ip)
 	lb.logger.Info(fmt.Sprint("server '", jr.Ip, "' added"))
 	return nil
 }
@@ -105,7 +106,7 @@ func (lb *LoadBalancer) AddClient(con net.Conn) error {
 				return
 
 			case req := <-c.Receive:
-				lb.logger.Info(fmt.Sprint("received req from client '", addr, "'"))
+				lb.logger.Debug(fmt.Sprint("received req from client '", addr, "'"))
 				lb.Incoming <- req
 			}
 		}
@@ -117,7 +118,7 @@ func (lb *LoadBalancer) AddClient(con net.Conn) error {
 
 // DistributeLoad implements a kind of "selective" fanout algorithm, distributing
 // messages from lb.Incoming based on load parameter and current load of the top
-// N/2 nodes with less load
+// N/2 nodes with less load.
 func (lb *LoadBalancer) DistributeLoad(ctx context.Context) {
 	for {
 		select {
@@ -125,10 +126,17 @@ func (lb *LoadBalancer) DistributeLoad(ctx context.Context) {
 			return
 
 		case req := <-lb.Incoming:
+			if len(lb.nodes) == 0 {
+				lb.logger.Warn("dont have any subscripted nodes to distribute request, ignoring...")
+				break
+			}
+
 			nodes := lb.retrieveLeastBusyNodes()
-			fmt.Println("least busy nodes are:", nodes)
-			i := lb.raffleRoulette(nodes)
-			fmt.Println("sending to node", i)
+			i := lb.raffleRoulette(nodes, req.Load)
+			if i < 0 {
+				lb.logger.Warn("dont have any available nodes to distribute request, ignoring...")
+				break
+			}
 			nodes[i].Send <- req
 		}
 	}
@@ -182,14 +190,9 @@ func (lb *LoadBalancer) retrieveLeastBusyNodes() []*ServerSession {
 		}
 	}
 
-	fmt.Println("sorting nodes", nodes)
-
 	sort.Sort(SortByLoad(nodes))
-	half := int(math.Ceil(float64(len(nodes) / 2)))
-	fmt.Println("cuting slice up to", half)
-	nodes = nodes[:half]
-	//nodes = nodes[:len(nodes)/2]
-	return nodes
+	half := int(math.Ceil(float64(len(nodes)) / 2))
+	return nodes[:half]
 }
 
 // raffleRoulette raffles a single node from the list, based on its current load.
@@ -205,7 +208,11 @@ func (lb *LoadBalancer) retrieveLeastBusyNodes() []*ServerSession {
 //
 //  4. Draws a rand num from within [1, 100] range, and check on which roulette
 //     interval it falls off
-func (lb *LoadBalancer) raffleRoulette(nodes []*ServerSession) int {
+//
+// If during step 1 the n-th node doesn't have the necessary available load to handle
+// the current request, the n node and all nodes of index m, such as m > n, are
+// discarded. If no node is capable to handle, index -1 is returned.
+func (lb *LoadBalancer) raffleRoulette(nodes []*ServerSession, load int32) int {
 	odds := make([]int32, len(nodes), len(nodes))
 	sum := int32(0)
 	for i, n := range nodes {
@@ -216,6 +223,11 @@ func (lb *LoadBalancer) raffleRoulette(nodes []*ServerSession) int {
 
 	interval := int32(0)
 	for i, odd := range odds {
+		if odd < load {
+			odds = odds[:i]
+			break
+		}
+
 		interval += odd * 100 / sum
 		odds[i] = interval
 	}
@@ -226,20 +238,24 @@ func (lb *LoadBalancer) raffleRoulette(nodes []*ServerSession) int {
 			return i
 		}
 	}
-	return 0
+	return -1
 }
 
-func (lb *LoadBalancer) updateServerLoad(ctx context.Context, sv *ServerSession, ip string) {
+func (lb *LoadBalancer) updateServerLoad(ctx context.Context, cancel context.CancelFunc, sv *ServerSession, ip string) {
 	for {
 		select {
 		case <-ctx.Done():
+			lb.mu.Lock()
+			delete(lb.nodes, ip)
+			lb.mu.Unlock()
+			lb.logger.Info(fmt.Sprint("server '", ip, "' removed"))
 			return
 
 		case hb := <-sv.Heartbeat:
 			lb.mu.Lock()
 			sv.Load = hb.CurrentLoad
 			lb.mu.Unlock()
-			lb.logger.Info(fmt.Sprint(ip, " current load: ", hb.CurrentLoad))
+			lb.logger.Debug(fmt.Sprint(ip, " current load: ", hb.CurrentLoad))
 		}
 	}
 }

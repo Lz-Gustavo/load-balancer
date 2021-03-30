@@ -28,8 +28,7 @@ type ServerSession struct {
 	cancel context.CancelFunc
 }
 
-func NewServerSession(ctx context.Context, con net.Conn) *ServerSession {
-	ct, c := context.WithCancel(ctx)
+func NewServerSession(ctx context.Context, cn context.CancelFunc, con net.Conn) *ServerSession {
 	svr := &ServerSession{
 		Load:      100,
 		Send:      make(chan *pb.Request, chanBuffSize),
@@ -40,12 +39,13 @@ func NewServerSession(ctx context.Context, con net.Conn) *ServerSession {
 			Name:       "session",
 			Level:      hclog.LevelFromString(logLevel),
 			TimeFormat: time.Kitchen,
+			Color:      hclog.AutoColor,
 			Output:     os.Stderr,
 		}),
 		conn:   con,
-		cancel: c,
+		cancel: cn,
 	}
-	svr.Run(ct)
+	svr.Run(ctx)
 	return svr
 }
 
@@ -65,6 +65,7 @@ func (sv *ServerSession) ReadHeartbeats(ctx context.Context) {
 			if err != nil {
 				if err == io.EOF {
 					sv.logger.Warn("server disconnected")
+					sv.Disconnect()
 					return
 				}
 				sv.logger.Error(fmt.Sprint("got undefined error while reading heartbeat, err: ", err.Error()))

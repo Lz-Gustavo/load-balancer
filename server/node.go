@@ -43,6 +43,7 @@ func NewNodeInstance(ctx context.Context) *NodeInstance {
 			Name:       "node",
 			Level:      hclog.LevelFromString(logLevel),
 			TimeFormat: time.Kitchen,
+			Color:      hclog.AutoColor,
 			Output:     os.Stderr,
 		}),
 		cancel: cn,
@@ -168,7 +169,6 @@ func (nd *NodeInstance) parseAndApplyLoadRequest(ctx context.Context, req []byte
 	}
 
 	go nd.releaseResourceAfterExecTime(ctx, r)
-	nd.logger.Info(fmt.Sprint("applied ", r.Load, " load for up to ", r.MaxExecTime, " sec"))
 	return nil
 }
 
@@ -185,6 +185,7 @@ func (nd *NodeInstance) generateHeartbeatMessage() ([]byte, error) {
 func (nd *NodeInstance) releaseResourceAfterExecTime(ctx context.Context, loadReq *pb.Request) {
 	sec := rand.Int31n(loadReq.MaxExecTime)
 	timer := time.NewTimer(time.Duration(sec) * time.Second)
+	nd.logger.Debug(fmt.Sprint("applied ", loadReq.Load, " load for ", sec, " sec"))
 
 	for {
 		select {

@@ -33,6 +33,7 @@ func NewClient(ctx context.Context, con net.Conn) *Client {
 			Name:       "client",
 			Level:      hclog.LevelFromString(logLevel),
 			TimeFormat: time.Kitchen,
+			Color:      hclog.AutoColor,
 			Output:     os.Stderr,
 		}),
 		conn:   con,
