@@ -126,8 +126,10 @@ func (lb *LoadBalancer) DistributeLoad(ctx context.Context) {
 			return
 
 		case req := <-lb.Incoming:
+			lb.mu.Lock()
 			if len(lb.nodes) == 0 {
 				lb.logger.Warn("dont have any subscripted nodes to distribute request, ignoring...")
+				lb.mu.Unlock()
 				break
 			}
 
@@ -135,9 +137,11 @@ func (lb *LoadBalancer) DistributeLoad(ctx context.Context) {
 			i := lb.raffleRoulette(nodes, req.Load)
 			if i < 0 {
 				lb.logger.Warn("dont have any available nodes to distribute request, ignoring...")
+				lb.mu.Unlock()
 				break
 			}
 			nodes[i].Send <- req
+			lb.mu.Unlock()
 		}
 	}
 }
@@ -180,9 +184,6 @@ func (lb *LoadBalancer) Shutdown() {
 
 // retrieveLeastBusyNodes fetches the top N/2 nodes with less load
 func (lb *LoadBalancer) retrieveLeastBusyNodes() []*ServerSession {
-	lb.mu.Lock()
-	defer lb.mu.Unlock()
-
 	nodes := make([]*ServerSession, 0)
 	for _, v := range lb.nodes {
 		if v != nil {

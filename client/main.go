@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"errors"
 	"flag"
+	"io"
 	"load-balancer/pb"
 	"log"
 	"net"
@@ -35,7 +36,10 @@ func main() {
 	rd := bufio.NewReader(os.Stdin)
 	for {
 		msg, err := rd.ReadString('\n')
-		if err != nil {
+		if err == io.EOF {
+			log.Fatalln("received EOF, finished execution")
+
+		} else if err != nil {
 			log.Println("failed to read:", msg, "got err:", err.Error(), "continuing...")
 		}
 
